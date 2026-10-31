@@ -1,0 +1,93 @@
+{
+  "$schema": "../../umbraco-package-schema.json",
+  "name": "BaryoDev.Umbraco.AiAssistant",
+  "version": "0.1.0",
+  "allowTelemetry": false,
+  "extensions": [
+    {
+      "type": "propertyAction",
+      "kind": "default",
+      "alias": "BaryoDev.AiAssistant.PolishAction",
+      "name": "Polish with Claude",
+      "api": "/App_Plugins/BaryoDev.AiAssistant/polish-action.js",
+      "forPropertyEditorUis": [
+        "Umb.PropertyEditorUi.TextBox",
+        "Umb.PropertyEditorUi.TextArea",
+        "Umb.PropertyEditorUi.Tiptap"
+      ],
+      "meta": {
+        "icon": "icon-wand",
+        "label": "Polish"
+      }
+    },
+    {
+      "type": "propertyAction",
+      "kind": "default",
+      "alias": "BaryoDev.AiAssistant.SeoAction",
+      "name": "SEO text with Claude",
+      "api": "/App_Plugins/BaryoDev.AiAssistant/seo-action.js",
+      "forPropertyEditorUis": [
+        "Umb.PropertyEditorUi.TextBox",
+        "Umb.PropertyEditorUi.TextArea"
+      ],
+      "meta": {
+        "icon": "icon-search",
+        "label": "Suggest SEO text"
+      }
+    },
+    {
+      "type": "propertyAction",
+      "kind": "default",
+      "alias": "BaryoDev.AiAssistant.AltTextAction",
+      "name": "Alt text with Claude",
+      "api": "/App_Plugins/BaryoDev.AiAssistant/alt-action.js",
+      "forPropertyEditorUis": [
+        "Umb.PropertyEditorUi.TextBox"
+      ],
+      "conditions": [
+        {
+          "alias": "Umb.Condition.WorkspaceAlias",
+          "match": "Umb.Workspace.Media"
+        }
+      ],
+      "meta": {
+        "icon": "icon-wand",
+        "label": "Suggest alt text"
+      }
+    },
+    {
+      "type": "dashboard",
+      "alias": "BaryoDev.AiAssistant.SettingsDashboard",
+      "name": "AI Assistant settings",
+      "element": "/App_Plugins/BaryoDev.AiAssistant/settings-dashboard.js",
+      "weight": -10,
+      "meta": {
+        "label": "AI Assistant",
+        "pathname": "ai-assistant"
+      },
+      "conditions": [
+        {
+          "alias": "Umb.Condition.SectionAlias",
+          "match": "Umb.Section.Settings"
+        }
+      ]
+    },
+    {
+      "type": "dashboard",
+      "alias": "BaryoDev.AiAssistant.BulkDashboard",
+      "name": "AI Assistant bulk review",
+      "element": "/App_Plugins/BaryoDev.AiAssistant/bulk-dashboard.js",
+      "weight": -10,
+      "meta": {
+        "label": "AI Assistant",
+        "pathname": "ai-assistant"
+      },
+      "conditions": [
+        {
+          "alias": "Umb.Condition.SectionAlias",
+          "match": "Umb.Section.Content"
+        }
+      ]
+    }
+  ]
+}

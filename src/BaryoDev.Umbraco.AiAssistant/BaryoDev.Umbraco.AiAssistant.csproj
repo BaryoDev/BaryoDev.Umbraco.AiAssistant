@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <PackageId>BaryoDev.Umbraco.AiAssistant</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>BaryoDev</Authors>
+    <Description>Claude writing help for the Umbraco backoffice: polish, translate, SEO pack, alt text, brand voice and bulk jobs. Bring your own Anthropic API key. The editor accepts, edits or discards every suggestion.</Description>
+    <PackageTags>umbraco umbraco-marketplace claude ai seo translation alt-text</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/BaryoDev/BaryoDev.Umbraco.AiAssistant</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/BaryoDev/BaryoDev.Umbraco.AiAssistant</RepositoryUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <StaticWebAssetBasePath>/</StaticWebAssetBasePath>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Umbraco.Cms.Web.Common" Version="17.*" />
+    <PackageReference Include="Umbraco.Cms.Api.Management" Version="17.*" />
+    <PackageReference Include="AngleSharp" Version="1.*" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../icon.png" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="BaryoDev.Umbraco.AiAssistant.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,228 @@
+name: Publish to NuGet
+
+# Version comes from <Version> in the package csproj, never from a hand-typed input, so the
+# published version is always recorded in git and the tag has to agree with it.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, test and pack without publishing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the runner mint the OIDC token nuget.org exchanges for a short-lived API key. No
+      # long-lived secret is stored in this repository.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Read version from source
+        id: version
+        run: |
+          VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/BaryoDev.Umbraco.AiAssistant/BaryoDev.Umbraco.AiAssistant.csproj)
+          test -n "$VERSION" || { echo "::error::No <Version> found in the csproj"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version from the csproj: $VERSION"
+
+      - name: Confirm tag matches the version in source
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match <Version> $VERSION" && exit 1
+          fi
+
+      - name: Refuse to republish a version that already exists
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # nuget.org accepts a version once, forever. --skip-duplicate below would turn a repeat
+          # into a silent success, so fail loudly here instead.
+          #
+          # Fails closed: only a 404 counts as not published. A 200 is parsed and compared, and
+          # anything else stops the run.
+          #
+          # Versions are compared the way NuGet normalizes them: build metadata after a + is
+          # dropped, case is folded, and a fourth component is trimmed when it is zero.
+          NORM=$(printf '%s' "$VERSION" | tr '[:upper:]' '[:lower:]' | cut -d'+' -f1)
+          case "$NORM" in *.*.*.0) NORM=${NORM%.0} ;; esac
+
+          ID=baryodev.umbraco.aiassistant
+          URL="https://api.nuget.org/v3-flatcontainer/$ID/index.json"
+          STATUS=$(curl -sS --max-time 30 -o /tmp/versions.json -w '%{http_code}' "$URL") || {
+            echo "::error::Could not reach nuget.org to check $ID for an existing $VERSION." && exit 1
+          }
+
+          case "$STATUS" in
+            404)
+              echo "$ID has never been published, so $VERSION is free."
+              ;;
+            200)
+              if jq -e --arg v "$NORM" \
+                   '(.versions // []) | map(ascii_downcase | split("+")[0]) | index($v)' \
+                   /tmp/versions.json > /dev/null; then
+                echo "::error::$VERSION is already on nuget.org. Bump <Version> in the csproj." && exit 1
+              fi
+              echo "$ID does not have $VERSION ($NORM) yet."
+              ;;
+            *)
+              echo "::error::nuget.org answered $STATUS when asked about $ID." && exit 1
+              ;;
+          esac
+
+      - run: dotnet restore src/BaryoDev.Umbraco.AiAssistant/BaryoDev.Umbraco.AiAssistant.csproj
+
+      - run: dotnet build src/BaryoDev.Umbraco.AiAssistant/BaryoDev.Umbraco.AiAssistant.csproj --configuration Release --no-restore
+
+      # A package must never ship without its tests having run.
+      - name: Test the package
+        run: dotnet test tests/BaryoDev.Umbraco.AiAssistant.Tests --configuration Release --verbosity normal
+
+      - name: Pack
+        run: dotnet pack src/BaryoDev.Umbraco.AiAssistant/BaryoDev.Umbraco.AiAssistant.csproj --configuration Release --no-build --output ./nupkgs
+
+      - name: Confirm the packed client is the file that was tested
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Static web assets travel through a build pipeline, so compare the packed bytes with
+          # the source rather than assume they match.
+          mkdir -p /tmp/packed
+          unzip -o -q "./nupkgs/BaryoDev.Umbraco.AiAssistant.$VERSION.nupkg" -d /tmp/packed
+          SRC=src/BaryoDev.Umbraco.AiAssistant/wwwroot/App_Plugins/BaryoDev.AiAssistant
+          PACKED=/tmp/packed/staticwebassets/App_Plugins/BaryoDev.AiAssistant
+          COUNT=0
+          for f in "$SRC"/*; do
+            name=$(basename "$f")
+            test -f "$PACKED/$name" || { echo "::error::$name is missing from the package"; exit 1; }
+            cmp -s "$PACKED/$name" "$f" || { echo "::error::The packed $name differs from the source."; exit 1; }
+            COUNT=$((COUNT + 1))
+          done
+          test "$COUNT" -gt 0 || { echo "::error::No client files found in the source."; exit 1; }
+          echo "$COUNT packed client files match the source."
+
+          # Listing metadata is named in the csproj but only packed by the None items beside it.
+          unzip -l "./nupkgs/BaryoDev.Umbraco.AiAssistant.$VERSION.nupkg" | grep -q 'icon.png'  || { echo "::error::icon.png not packed"; exit 1; }
+          unzip -l "./nupkgs/BaryoDev.Umbraco.AiAssistant.$VERSION.nupkg" | grep -q 'README.md' || { echo "::error::README.md not packed"; exit 1; }
+
+      - name: List artifacts
+        run: ls -la ./nupkgs
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nupkgs
+          path: ./nupkgs/*
+
+      # Everything above proves the source is correct. This proves the package works when it is
+      # consumed as a package, where static web assets resolve differently from a project reference.
+      - name: Install the package into a scratch site, as a consumer would
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          FEED="$PWD/nupkgs"
+          WORK=$(mktemp -d)
+          cd "$WORK"
+
+          dotnet new web -o consumer --framework net10.0 >/dev/null
+          cd consumer
+
+          # The local feed is listed alongside nuget.org for the package's own dependencies. The
+          # version is pinned, so a previously published build cannot be picked up instead.
+          cat > nuget.config <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="local" value="$FEED" />
+              <add key="nuget" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+          </configuration>
+          XML
+
+          dotnet add package BaryoDev.Umbraco.AiAssistant --version "$VERSION" --source "$FEED"
+          dotnet build --configuration Release
+
+          MANIFEST=$(find obj -name 'staticwebassets.build.json' | head -1)
+          test -n "$MANIFEST" || {
+            echo "::error::No static web assets manifest. The package contributed no client assets at all." && exit 1
+          }
+
+          # Parsed, not grepped, so one record has to carry both the file and the base path.
+          python3 - "$MANIFEST" <<'PY'
+          import json, sys
+
+          assets = json.load(open(sys.argv[1])).get("Assets", [])
+          want_base = "App_Plugins/BaryoDev.AiAssistant"
+          failed = False
+
+          for want_file in ("umbraco-package.json", "common.js", "bulk-dashboard.js", "settings-dashboard.js"):
+              matches = [
+                  a for a in assets
+                  if a.get("RelativePath", "").rsplit("/", 1)[-1] == want_file
+                  and want_base in a.get("RelativePath", "").replace("\\", "/") + "/" + a.get("BasePath", "")
+              ]
+
+              if matches:
+                  print(f"Consumer resolves {want_base}/{want_file}")
+                  continue
+
+              failed = True
+              print(f"::error::No asset record for {want_file} under {want_base}.")
+              for a in assets:
+                  if want_file in a.get("RelativePath", ""):
+                      print(f"  RelativePath={a.get('RelativePath')!r} BasePath={a.get('BasePath')!r}")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      # Requested here because the key expires after an hour and each OIDC token buys exactly one
+      # key. Runs on dry runs too, so a dry run verifies the trusted publishing policy. Obtaining
+      # a key publishes nothing.
+      - name: Exchange OIDC token for a short-lived NuGet key
+        id: nuget_login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ vars.NUGET_USER || 'arnelirobles' }}
+
+      - name: Confirm the key was issued
+        env:
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::No API key returned. Check the trusted publishing policy on nuget.org." && exit 1
+          fi
+          echo "Trusted publishing OK: short-lived key issued."
+
+      # Publication needs a tag push. A manual run cannot reach this step, because the tag is what
+      # proves the version was reviewed.
+      - name: Publish
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+        run: |
+          PKG="BaryoDev.Umbraco.AiAssistant.$VERSION.nupkg"
+          test -f "./nupkgs/$PKG" || { echo "::error::$PKG was not packed"; exit 1; }
+          dotnet nuget push "./nupkgs/$PKG" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

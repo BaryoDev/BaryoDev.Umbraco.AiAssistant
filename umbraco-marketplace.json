@@ -1,0 +1,23 @@
+{
+  "$schema": "https://marketplace.umbraco.com/umbraco-marketplace-schema.json",
+  "PackageType": "Package",
+  "Category": "Developer Tools",
+  "Description": "Claude writing help in the Umbraco backoffice. Polish text, translate pages, write SEO titles and descriptions, and add alt text to images, one item at a time or as a bulk job with a cost estimate. Brand voice rules keep the tone yours. You bring your own Anthropic API key and pay Anthropic directly. Every result is a suggestion: the editor accepts, edits or discards it, and a facts check flags changed numbers and names. A monthly spend cap is available. Free and MIT licensed.",
+  "AuthorDetails": {
+    "Name": "BaryoDev",
+    "Description": "Small open source .NET and JavaScript packages.",
+    "Url": "https://github.com/BaryoDev",
+    "ImageUrl": "https://raw.githubusercontent.com/BaryoDev/BaryoDev.Umbraco.AiAssistant/main/icon.png"
+  },
+  "DocumentationUrl": "https://github.com/BaryoDev/BaryoDev.Umbraco.AiAssistant#readme",
+  "IssueTrackerUrl": "https://github.com/BaryoDev/BaryoDev.Umbraco.AiAssistant/issues",
+  "LicenseTypes": [ "Free" ],
+  "Tags": [
+    "ai",
+    "claude",
+    "seo",
+    "translation",
+    "alt text",
+    "content editing"
+  ]
+}
