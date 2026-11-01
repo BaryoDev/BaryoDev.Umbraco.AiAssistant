@@ -6,6 +6,9 @@ const SOURCE_NOTE = {
   default: "Not set. The default applies.",
 };
 
+const FIELDS = ["#ai-key", "#ai-model", "#ai-cap", "#ai-in", "#ai-out", "#ai-rules"];
+const SAVE_FIELDS = FIELDS.filter((f) => f !== "#ai-rules");
+
 class AiAssistantSettingsDashboard extends Base {
   #s = null;
   #message = "";
@@ -29,18 +32,35 @@ class AiAssistantSettingsDashboard extends Base {
     this.#render();
   }
 
+  #typed() {
+    return FIELDS.map((f) => [f, this.querySelector(f)?.value]);
+  }
+
+  #restore(typed, settled = []) {
+    for (const [f, value] of typed) {
+      const el = this.querySelector(f);
+      if (el && value !== undefined && !settled.includes(f)) el.value = value;
+    }
+  }
+
+  // Rendering rebuilds the form, so what was typed is put back. fn returns the fields it saved, which
+  // show the server's value instead.
   async #act(label, fn) {
+    const typed = this.#typed();
+    let settled = [];
     this.#busy = true;
     this.#message = "";
     this.#error = "";
     this.#render();
+    this.#restore(typed);
     try {
-      await fn();
+      settled = (await fn()) ?? [];
     } catch (e) {
       this.#error = `${label}: ${e.message}`;
     }
     this.#busy = false;
     this.#render();
+    this.#restore(typed, settled);
   }
 
   #keyValue() {
@@ -62,7 +82,8 @@ class AiAssistantSettingsDashboard extends Base {
     return this.#act("Save failed", async () => {
       if (key) this.#s = await call(this, "/settings/key", "PUT", { key });
       this.#s = await call(this, "/settings", "PUT", body);
-      this.#message = "Saved.";
+      this.#message = this.#s?.keySource === "none" ? "Saved. No API key is set, so nothing will run until you add one." : "Saved.";
+      return SAVE_FIELDS;
     });
   }
 
@@ -72,6 +93,7 @@ class AiAssistantSettingsDashboard extends Base {
       this.#s = await call(this, "/voice/rules", "PUT", { rules });
       this.#draft = null;
       this.#message = "Rules saved.";
+      return ["#ai-rules"];
     });
   }
 
@@ -81,6 +103,7 @@ class AiAssistantSettingsDashboard extends Base {
       this.#s = await call(this, "/voice/rules", "PUT", { rules: "" });
       this.#draft = null;
       this.#message = "The default rules apply.";
+      return ["#ai-rules"];
     });
   }
 
@@ -95,6 +118,7 @@ class AiAssistantSettingsDashboard extends Base {
       const draft = await call(this, "/voice/draft", "POST", { nodeIds: ids });
       this.#draft = draft.rules;
       this.#message = `Draft ready.${draft.skipped ? ` ${draft.skipped} chosen page${draft.skipped === 1 ? " was" : "s were"} left out because ${draft.skipped === 1 ? "it has" : "they have"} no text in the source language.` : ""} Read it, edit it, then click Save rules. Nothing is saved yet.`;
+      return ["#ai-rules"];
     });
   }
 
@@ -102,7 +126,7 @@ class AiAssistantSettingsDashboard extends Base {
     const key = this.#s?.keySource === "configuration" ? null : this.#keyValue().trim() || null;
     return this.#act("Test failed", async () => {
       const result = await call(this, "/settings/test", "POST", { key });
-      this.#message = result.ok ? result.message : "";
+      this.#message = result.ok ? `${result.message}${key ? " The key is not saved yet. Click Save to keep it." : ""}` : "";
       this.#error = result.ok ? "" : result.message;
     });
   }
@@ -112,6 +136,7 @@ class AiAssistantSettingsDashboard extends Base {
     return this.#act("Remove failed", async () => {
       this.#s = await call(this, "/settings/key", "DELETE");
       this.#message = "The saved key was removed.";
+      return ["#ai-key"];
     });
   }
 
@@ -139,6 +164,7 @@ class AiAssistantSettingsDashboard extends Base {
               <li>Create a key in your Anthropic account.</li>
               <li>Paste it in the box below.</li>
               <li>Click Test.</li>
+              <li>Click Save.</li>
             </ol>
             Usage is billed to your own Anthropic account.
           </div>` : ""}

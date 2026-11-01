@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
   <PropertyGroup>
     <PackageId>BaryoDev.Umbraco.AiAssistant</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>BaryoDev</Authors>
     <Description>Claude writing help for the Umbraco backoffice: polish, translate, SEO pack, alt text, brand voice and bulk jobs. Bring your own Anthropic API key. The editor accepts, edits or discards every suggestion.</Description>
     <PackageTags>umbraco umbraco-marketplace claude ai seo translation alt-text</PackageTags>
