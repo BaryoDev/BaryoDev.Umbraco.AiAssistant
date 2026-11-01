@@ -43,22 +43,30 @@ class AiAssistantSettingsDashboard extends Base {
     }
   }
 
-  // Rendering rebuilds the form, so what was typed is put back. fn returns the fields it saved, which
-  // show the server's value instead.
-  async #act(label, fn) {
+  #fail(message) {
     const typed = this.#typed();
-    let settled = [];
+    this.#error = message;
+    this.#render();
+    this.#restore(typed);
+  }
+
+  // Rendering rebuilds the form, so what was typed is put back. fn adds the fields it saved to its
+  // argument, and those show the server's value instead.
+  async #act(label, fn) {
+    const settled = [];
     this.#busy = true;
     this.#message = "";
     this.#error = "";
+    let typed = this.#typed();
     this.#render();
     this.#restore(typed);
     try {
-      settled = (await fn()) ?? [];
+      await fn(settled);
     } catch (e) {
       this.#error = `${label}: ${e.message}`;
     }
     this.#busy = false;
+    typed = this.#typed();
     this.#render();
     this.#restore(typed, settled);
   }
@@ -76,34 +84,36 @@ class AiAssistantSettingsDashboard extends Base {
     };
     const body = { model, monthlyCap: num("#ai-cap"), inputPrice: num("#ai-in"), outputPrice: num("#ai-out") };
     if ([body.monthlyCap, body.inputPrice, body.outputPrice].some((n) => n !== null && !(n >= 0))) {
-      this.#error = "Cap and prices must be numbers of zero or more.";
-      return this.#render();
+      return this.#fail("Cap and prices must be numbers of zero or more.");
     }
-    return this.#act("Save failed", async () => {
-      if (key) this.#s = await call(this, "/settings/key", "PUT", { key });
+    return this.#act("Save failed", async (settled) => {
+      if (key) {
+        this.#s = await call(this, "/settings/key", "PUT", { key });
+        settled.push("#ai-key");
+      }
       this.#s = await call(this, "/settings", "PUT", body);
       this.#message = this.#s?.keySource === "none" ? "Saved. No API key is set, so nothing will run until you add one." : "Saved.";
-      return SAVE_FIELDS;
+      settled.push(...SAVE_FIELDS);
     });
   }
 
   #saveRules() {
     const rules = this.querySelector("#ai-rules").value;
-    return this.#act("Saving the rules failed", async () => {
+    return this.#act("Saving the rules failed", async (settled) => {
       this.#s = await call(this, "/voice/rules", "PUT", { rules });
       this.#draft = null;
       this.#message = "Rules saved.";
-      return ["#ai-rules"];
+      settled.push("#ai-rules");
     });
   }
 
   #restoreRules() {
     if (!confirm("Remove the saved rules and use the default?")) return;
-    return this.#act("Restoring the rules failed", async () => {
+    return this.#act("Restoring the rules failed", async (settled) => {
       this.#s = await call(this, "/voice/rules", "PUT", { rules: "" });
       this.#draft = null;
       this.#message = "The default rules apply.";
-      return ["#ai-rules"];
+      settled.push("#ai-rules");
     });
   }
 
@@ -111,14 +121,13 @@ class AiAssistantSettingsDashboard extends Base {
     const picker = this.querySelector("#ai-articles");
     const ids = (picker?.selection ?? []).filter(Boolean);
     if (ids.length === 0 || ids.length > 10) {
-      this.#error = "Choose between 1 and 10 articles.";
-      return this.#render();
+      return this.#fail("Choose between 1 and 10 articles.");
     }
-    return this.#act("Drafting failed", async () => {
+    return this.#act("Drafting failed", async (settled) => {
       const draft = await call(this, "/voice/draft", "POST", { nodeIds: ids });
       this.#draft = draft.rules;
       this.#message = `Draft ready.${draft.skipped ? ` ${draft.skipped} chosen page${draft.skipped === 1 ? " was" : "s were"} left out because ${draft.skipped === 1 ? "it has" : "they have"} no text in the source language.` : ""} Read it, edit it, then click Save rules. Nothing is saved yet.`;
-      return ["#ai-rules"];
+      settled.push("#ai-rules");
     });
   }
 
@@ -133,10 +142,10 @@ class AiAssistantSettingsDashboard extends Base {
 
   #remove() {
     if (!confirm("Remove the saved key? A key set in configuration is not affected.")) return;
-    return this.#act("Remove failed", async () => {
+    return this.#act("Remove failed", async (settled) => {
       this.#s = await call(this, "/settings/key", "DELETE");
       this.#message = "The saved key was removed.";
-      return ["#ai-key"];
+      settled.push("#ai-key");
     });
   }
 
