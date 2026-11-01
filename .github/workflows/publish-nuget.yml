@@ -2,8 +2,13 @@ name: Publish to NuGet
 
 # Version comes from <Version> in the package csproj, never from a hand-typed input, so the
 # published version is always recorded in git and the tag has to agree with it.
+#
+# A merge to main is the release switch: when <Version> is new on nuget.org the run publishes and
+# tags the commit, and when it is not the run stops after the check job.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -18,8 +23,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Decide whether this run has anything to publish
+        id: decide
+        run: |
+          # Tags and manual runs always go on. Only a merge to main can be a no-op.
+          if [ "$GITHUB_EVENT_NAME" != "push" ] || [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          VERSION=$(grep -oP '(?<=<Version>)[^<]+' src/BaryoDev.Umbraco.AiAssistant/BaryoDev.Umbraco.AiAssistant.csproj)
+          test -n "$VERSION" || { echo "::error::No <Version> found in the csproj"; exit 1; }
+          NORM=$(printf '%s' "$VERSION" | tr '[:upper:]' '[:lower:]' | cut -d'+' -f1)
+          case "$NORM" in *.*.*.0) NORM=${NORM%.0} ;; esac
+
+          # Fails closed, like the check in the publish job: only a 404 or a parsed list counts.
+          ID=baryodev.umbraco.aiassistant
+          URL="https://api.nuget.org/v3-flatcontainer/$ID/index.json"
+          STATUS=$(curl -sS --max-time 30 -o /tmp/versions.json -w '%{http_code}' "$URL") || {
+            echo "::error::Could not reach nuget.org to check $ID." && exit 1
+          }
+          PUBLISH=false
+          case "$STATUS" in
+            404) PUBLISH=true ;;
+            200)
+              RC=0
+              jq -e --arg v "$NORM" '.versions | map(ascii_downcase | split("+")[0]) | index($v)' \
+                /tmp/versions.json > /dev/null || RC=$?
+              case "$RC" in
+                0) ;;
+                1) PUBLISH=true ;;
+                *) echo "::error::Could not read the version list for $ID (jq exit $RC)." && exit 1 ;;
+              esac
+              ;;
+            *) echo "::error::nuget.org answered $STATUS when asked about $ID." && exit 1 ;;
+          esac
+
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "$VERSION needs publishing: $PUBLISH"
+
+  publish:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
       # Lets the runner mint the OIDC token nuget.org exchanges for a short-lived API key. No
@@ -212,10 +269,11 @@ jobs:
           fi
           echo "Trusted publishing OK: short-lived key issued."
 
-      # Publication needs a tag push. A manual run cannot reach this step, because the tag is what
-      # proves the version was reviewed.
+      # Publication needs a push to main or a v* tag, the only push refs this workflow runs on. A
+      # manual run cannot reach this step, because it can run on a branch that has not been through
+      # a pull request.
       - name: Publish
-        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
+        if: github.event_name == 'push'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
@@ -226,3 +284,24 @@ jobs:
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+
+  # Its own job so the token that can write to the repository never sits beside the build, the
+  # tests or the package install. A tag made with this token does not start another run.
+  tag:
+    needs: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag the published commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.publish.outputs.version }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then
+            echo "$TAG already exists."
+            exit 0
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA" > /dev/null
+          echo "Tagged $GITHUB_SHA as $TAG."
