@@ -99,16 +99,18 @@ public sealed class BulkController(
 
     /// <summary>Items come back only for nodes the caller can browse, so text on other nodes is never sent.</summary>
     [HttpGet("jobs/{id:guid}")]
-    public Task<IActionResult> Get(Guid id) =>
-        With(id, async j =>
-        {
-            var can = Can(ActionBrowse.ActionLetter, j.Kind);
-            var allowed = new List<BulkItem>();
-            foreach (BulkItem item in j.Items)
-                if (await can(item.NodeId, item.Culture)) allowed.Add(item);
-            j.Items = allowed;
-            return j;
-        });
+    public Task<IActionResult> Get(Guid id) => With(id, j => Task.FromResult<object>(j));
+
+    /// <summary>Drops items for nodes the caller cannot browse. Every job returned by this controller goes through here.</summary>
+    private async Task<BulkJob> Filter(BulkJob job)
+    {
+        var can = Can(ActionBrowse.ActionLetter, job.Kind);
+        var allowed = new List<BulkItem>();
+        foreach (BulkItem item in job.Items)
+            if (await can(item.NodeId, item.Culture)) allowed.Add(item);
+        job.Items = allowed;
+        return job;
+    }
 
     [HttpPost("jobs/{id:guid}/cancel")]
     public Task<IActionResult> Cancel(Guid id) => With(id, j => Task.FromResult<object>(bulk.Cancel(id)));
@@ -150,7 +152,7 @@ public sealed class BulkController(
         With(id, async j =>
         {
             var (job, result) = await bulk.AcceptAllPassedAsync(id, RequireUser(), Can(ActionUpdate.ActionLetter, j.Kind));
-            return new { job, result };
+            return new { job = await Filter(job), result };
         });
 
     /// <summary>Changing a suggestion needs the same node permission as accepting it.</summary>
@@ -169,7 +171,11 @@ public sealed class BulkController(
         BulkJob? job = jobs.Get(id);
         if (job is null) return NotFound();
         if (!await CanSee(job) || !await HasSectionFor(job.Kind)) return Forbid();
-        try { return Ok(await action(job)); }
+        try
+        {
+            object result = await action(job);
+            return Ok(result is BulkJob returned ? await Filter(returned) : result);
+        }
         catch (BulkException e) { return Fail(e.Message); }
     }
 

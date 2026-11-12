@@ -103,6 +103,42 @@ public class AccessTests
     }
 
     [Fact]
+    public async Task Cancel_and_reject_return_no_item_text_for_nodes_the_caller_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new NoNodeAccess(), jobs), "x");
+
+        var cancelled = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Cancel(job.Id)).Value);
+
+        Assert.Empty(cancelled.Items);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(cancelled));
+    }
+
+    /// <summary>Allows the section policies and Update on nodes, but refuses Browse.</summary>
+    private sealed class UpdateNotBrowse : IAuthorizationService
+    {
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource, IEnumerable<IAuthorizationRequirement> requirements) =>
+            Task.FromResult(AuthorizationResult.Failed());
+
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource, string policyName) =>
+            Task.FromResult(resource is global::Umbraco.Cms.Core.Security.Authorization.ContentPermissionResource r
+                && r.PermissionsToCheck.Contains(global::Umbraco.Cms.Core.Actions.ActionBrowse.ActionLetter)
+                    ? AuthorizationResult.Failed()
+                    : AuthorizationResult.Success());
+    }
+
+    [Fact]
+    public async Task Reject_returns_no_item_text_for_nodes_the_caller_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new UpdateNotBrowse(), jobs), "x");
+
+        var rejected = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Reject(job.Id, job.Items[0].Id)).Value);
+
+        Assert.Empty(rejected.Items);
+    }
+
+    [Fact]
     public async Task A_user_who_can_browse_the_nodes_reads_the_items_and_the_creator_always_sees_the_job_listed()
     {
         (JobStore jobs, BulkJob job) = OthersJob();
@@ -124,7 +160,7 @@ public class AccessTests
         Assert.NotEmpty(controllers);
         foreach (Type t in controllers)
             Assert.True(
-                t.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true).Cast<AuthorizeAttribute>().Any(a => !string.IsNullOrWhiteSpace(a.Policy)),
+                t.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false).Cast<AuthorizeAttribute>().Any(a => !string.IsNullOrWhiteSpace(a.Policy)),
                 $"{t.Name} has no [Authorize(Policy = ...)]");
     }
 
