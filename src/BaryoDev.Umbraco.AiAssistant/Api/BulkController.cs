@@ -83,12 +83,32 @@ public sealed class BulkController(
     {
         var visible = new List<JobSummary>();
         foreach (BulkJob j in jobs.List())
-            if (await CanSee(j)) visible.Add(Summary(j));
+            if (await CanSee(j) && await CanBrowseAny(j)) visible.Add(Summary(j));
         return Ok(visible);
     }
 
+    /// <summary>The job's creator sees their own job. Anyone else sees it only when they can browse at least one of its nodes.</summary>
+    private async Task<bool> CanBrowseAny(BulkJob job)
+    {
+        if (job.CreatedBy == UserName || job.Items.Count == 0) return true;
+        var can = Can(ActionBrowse.ActionLetter, job.Kind);
+        foreach (BulkItem item in job.Items)
+            if (await can(item.NodeId, item.Culture)) return true;
+        return false;
+    }
+
+    /// <summary>Items come back only for nodes the caller can browse, so text on other nodes is never sent.</summary>
     [HttpGet("jobs/{id:guid}")]
-    public Task<IActionResult> Get(Guid id) => With(id, j => Task.FromResult<object>(j));
+    public Task<IActionResult> Get(Guid id) =>
+        With(id, async j =>
+        {
+            var can = Can(ActionBrowse.ActionLetter, j.Kind);
+            var allowed = new List<BulkItem>();
+            foreach (BulkItem item in j.Items)
+                if (await can(item.NodeId, item.Culture)) allowed.Add(item);
+            j.Items = allowed;
+            return j;
+        });
 
     [HttpPost("jobs/{id:guid}/cancel")]
     public Task<IActionResult> Cancel(Guid id) => With(id, j => Task.FromResult<object>(bulk.Cancel(id)));

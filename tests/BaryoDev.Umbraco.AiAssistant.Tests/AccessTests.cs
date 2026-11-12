@@ -73,6 +73,61 @@ public class AccessTests
         Assert.Equal(ItemState.Ready, jobs.Get(job.Id)!.Items.First().State);
     }
 
+    private static (JobStore Jobs, BulkJob Job) OthersJob()
+    {
+        var jobs = new JobStore(new MemoryKeyValueStore());
+        var job = new BulkJob { Kind = JobKind.Polish, CreatedBy = "someone-else", State = JobState.Stopped };
+        var item = new BulkItem { NodeId = Guid.NewGuid(), Name = "Private page", State = ItemState.Ready };
+        item.Fields.Add(new FieldChange { Alias = "body", Original = "secret original", Suggestion = "secret suggestion" });
+        job.Items.Add(item);
+        jobs.Add(job);
+        return (jobs, job);
+    }
+
+    private static BulkController AsUser(BulkController c, string id)
+    {
+        c.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, id)], "test"));
+        return c;
+    }
+
+    [Fact]
+    public async Task A_settings_user_reading_someone_elses_job_gets_no_items_for_nodes_they_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new NoNodeAccess(), jobs), "x");
+
+        var read = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Get(job.Id)).Value);
+
+        Assert.Empty(read.Items);
+        Assert.Empty(Assert.IsType<List<JobSummary>>(Assert.IsType<OkObjectResult>(await c.List()).Value));
+    }
+
+    [Fact]
+    public async Task A_user_who_can_browse_the_nodes_reads_the_items_and_the_creator_always_sees_the_job_listed()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+
+        var read = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await AsUser(Bulk(new Authz(), jobs), "x").Get(job.Id)).Value);
+        Assert.Single(read.Items);
+
+        var listed = Assert.IsType<List<JobSummary>>(Assert.IsType<OkObjectResult>(await AsUser(Bulk(new NoNodeAccess(), jobs), "someone-else").List()).Value);
+        Assert.Single(listed);
+    }
+
+    [Fact]
+    public void Every_api_controller_carries_an_authorize_policy()
+    {
+        var controllers = typeof(BulkController).Assembly.GetTypes()
+            .Where(t => !t.IsAbstract && typeof(global::Umbraco.Cms.Api.Management.Controllers.ManagementApiControllerBase).IsAssignableFrom(t))
+            .ToList();
+
+        Assert.NotEmpty(controllers);
+        foreach (Type t in controllers)
+            Assert.True(
+                t.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true).Cast<AuthorizeAttribute>().Any(a => !string.IsNullOrWhiteSpace(a.Policy)),
+                $"{t.Name} has no [Authorize(Policy = ...)]");
+    }
+
     [Fact]
     public async Task A_content_only_user_cannot_estimate_or_start_an_alt_text_run()
     {

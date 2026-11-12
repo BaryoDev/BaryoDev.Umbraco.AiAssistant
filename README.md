@@ -26,7 +26,7 @@ Add your Anthropic API key in the backoffice. Go to Settings, open the "AI Assis
 
 Two ways, and configuration wins when both are set:
 
-1. The Settings dashboard. The key is write-only: no endpoint returns it, it is never logged, and a failed Test gives a plain reason without repeating it. It is stored encrypted in the Umbraco database with ASP.NET Data Protection. The key ring is its own and lives under `umbraco/Data/DataProtection-Keys/AiAssistant` (change it with `KeysPath`). If the ring is lost, the dashboard says the saved key can no longer be read and asks you to enter it again.
+1. The Settings dashboard. The key is write-only: no endpoint returns it, it is never logged, and a failed Test gives a plain reason without repeating it. It is stored in the Umbraco database, encrypted with ASP.NET Data Protection. The key ring is its own and lives under `umbraco/Data/DataProtection-Keys/AiAssistant` (change it with `KeysPath`). The ring files are not protected at rest (no certificate or machine key wraps them), so anyone who can read both that folder and the database can decrypt the key. Restrict access to both. If the ring is lost, the dashboard says the saved key can no longer be read and asks you to enter it again.
 2. Configuration or environment: `BaryoDev__AiAssistant__Key`. Keep it out of appsettings in git.
 
 Only users with Settings section access can read the state or change the key, the cap or the rules. This is enforced on the server.
@@ -67,11 +67,12 @@ Anything set in configuration wins over the same setting saved in the dashboard,
 - Each item has a `notes` list for advice such as a length over the limit, separate from the facts check (`missing`).
 - A run limited to one language leaves out invariant pages, unless that language is the default language.
 - Edit, reject and resume need the same permission on the node as accept. Cancel is open to the user who started the run and to Settings users.
+- Reading a job returns only the items for nodes the user can browse, and the job list shows a job only to the user who started it or to a Settings user who can browse at least one of its nodes.
 - If one item fails with an unexpected error during "accept all", that item is marked failed with a plain message and the rest continue. Any unexpected error from the API gives a 500 with a plain message, and the detail goes to the server log only.
 
 ## Spend cap and usage
 
-Input and output tokens are counted per call from the API response and stored per month (UTC). Cost is an estimate from the prices you enter, taken at the price in force when the call was made. The cap is checked on the server before each call. At the cap, calls stop with a clear message and the API answers 402. The default is no cap. Bulk jobs always show an estimated cost first and need a confirm. The key Test button is counted too. Calls already running when the cap is reached finish, so spend can pass the cap by the cost of those calls. A cap needs a price: with no price set while a cap is active, calls are refused. A cap set in configuration cannot be weakened from the dashboard.
+Input and output tokens are counted per call from the API response and stored per month (UTC). Cost is an estimate from the prices you enter, taken at the price in force when the call was made. The cap is checked on the server before each call. At the cap, calls stop with a clear message and the API answers 402. The default is no cap. Bulk jobs always show an estimated cost first and need a confirm. The key Test button is counted too. Calls already running when the cap is reached finish, so spend can pass the cap by the cost of those calls. A call that times out (120 seconds) is not counted against the cap, because no usage comes back, even though Anthropic may still have processed it. A cap needs a price: with no price set while a cap is active, calls are refused. A cap set in configuration cannot be weakened from the dashboard.
 
 ## Safety
 
