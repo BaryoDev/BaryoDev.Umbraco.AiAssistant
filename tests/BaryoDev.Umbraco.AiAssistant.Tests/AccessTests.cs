@@ -37,8 +37,40 @@ public class AccessTests
         return controller;
     }
 
-    private static BulkController Bulk(IAuthorizationService authz, JobStore? jobs = null) =>
-        WithUser(new BulkController(null!, jobs ?? new JobStore(new MemoryKeyValueStore()), authz, null!, Opts.Effective(new AiAssistantOptions { Key = "test-NOT-A-REAL-KEY-000" })));
+    /// <summary>Answers interface calls from one handler, so Umbraco's security accessor can be faked without a mocking library.</summary>
+    public class Stub : System.Reflection.DispatchProxy
+    {
+        private Func<string, object?> _handler = _ => null;
+
+        protected override object? Invoke(System.Reflection.MethodInfo? method, object?[]? args)
+        {
+            object? r = _handler(method!.Name);
+            Type t = method.ReturnType;
+            return r ?? (t.IsValueType && t != typeof(void) ? Activator.CreateInstance(t) : null);
+        }
+
+        public static T Of<T>(Func<string, object?> handler) where T : class
+        {
+            T proxy = Create<T, Stub>();
+            ((Stub)(object)proxy)._handler = handler;
+            return proxy;
+        }
+    }
+
+    private static global::Umbraco.Cms.Core.Security.IBackOfficeSecurityAccessor SignedIn(int userId)
+    {
+        var user = Stub.Of<global::Umbraco.Cms.Core.Models.Membership.IUser>(m => m == "get_Id" ? userId : null);
+        var security = Stub.Of<global::Umbraco.Cms.Core.Security.IBackOfficeSecurity>(m => m == "get_CurrentUser" ? user : null);
+        return Stub.Of<global::Umbraco.Cms.Core.Security.IBackOfficeSecurityAccessor>(m => m == "get_BackOfficeSecurity" ? security : null);
+    }
+
+    private static BulkController Bulk(IAuthorizationService authz, JobStore? jobs = null, global::Umbraco.Cms.Core.Security.IBackOfficeSecurityAccessor? security = null)
+    {
+        jobs ??= new JobStore(new MemoryKeyValueStore());
+        var settings = Opts.Effective(new AiAssistantOptions { Key = "test-NOT-A-REAL-KEY-000" });
+        var bulk = new BulkService(jobs, new FakeGateway(), [], settings, null!, TimeProvider.System);
+        return WithUser(new BulkController(bulk, jobs, authz, security!, settings));
+    }
 
     [Fact]
     public async Task A_content_only_user_cannot_run_alt_text_on_one_image()
@@ -71,6 +103,108 @@ public class AccessTests
         })
             Assert.Equal(400, Assert.IsType<ObjectResult>(result).StatusCode);
         Assert.Equal(ItemState.Ready, jobs.Get(job.Id)!.Items.First().State);
+    }
+
+    private static (JobStore Jobs, BulkJob Job) OthersJob()
+    {
+        var jobs = new JobStore(new MemoryKeyValueStore());
+        var job = new BulkJob { Kind = JobKind.Polish, CreatedBy = "someone-else", State = JobState.Stopped };
+        var item = new BulkItem { NodeId = Guid.NewGuid(), Name = "Private page", State = ItemState.Ready };
+        item.Fields.Add(new FieldChange { Alias = "body", Original = "secret original", Suggestion = "secret suggestion" });
+        job.Items.Add(item);
+        jobs.Add(job);
+        return (jobs, job);
+    }
+
+    private static BulkController AsUser(BulkController c, string id)
+    {
+        c.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(ClaimTypes.NameIdentifier, id)], "test"));
+        return c;
+    }
+
+    [Fact]
+    public async Task A_settings_user_reading_someone_elses_job_gets_no_items_for_nodes_they_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new NoNodeAccess(), jobs), "x");
+
+        var read = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Get(job.Id)).Value);
+
+        Assert.Empty(read.Items);
+        Assert.Empty(Assert.IsType<List<JobSummary>>(Assert.IsType<OkObjectResult>(await c.List()).Value));
+    }
+
+    [Fact]
+    public async Task Cancel_and_reject_return_no_item_text_for_nodes_the_caller_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new NoNodeAccess(), jobs), "x");
+
+        var cancelled = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Cancel(job.Id)).Value);
+
+        Assert.Empty(cancelled.Items);
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(cancelled));
+    }
+
+    /// <summary>Allows the section policies and Update on nodes, but refuses Browse.</summary>
+    private sealed class UpdateNotBrowse : IAuthorizationService
+    {
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource, IEnumerable<IAuthorizationRequirement> requirements) =>
+            Task.FromResult(AuthorizationResult.Failed());
+
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource, string policyName) =>
+            Task.FromResult(resource is global::Umbraco.Cms.Core.Security.Authorization.ContentPermissionResource r
+                && r.PermissionsToCheck.Contains(global::Umbraco.Cms.Core.Actions.ActionBrowse.ActionLetter)
+                    ? AuthorizationResult.Failed()
+                    : AuthorizationResult.Success());
+    }
+
+    [Fact]
+    public async Task Reject_returns_no_item_text_for_nodes_the_caller_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new UpdateNotBrowse(), jobs), "x");
+
+        var rejected = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await c.Reject(job.Id, job.Items[0].Id)).Value);
+
+        Assert.Empty(rejected.Items);
+    }
+
+    [Fact]
+    public async Task Accept_all_returns_no_item_text_for_nodes_the_caller_cannot_browse()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+        var c = AsUser(Bulk(new UpdateNotBrowse(), jobs, SignedIn(7)), "x");
+
+        var ok = Assert.IsType<OkObjectResult>(await c.AcceptAll(job.Id));
+
+        Assert.DoesNotContain("secret", System.Text.Json.JsonSerializer.Serialize(ok.Value));
+    }
+
+    [Fact]
+    public async Task A_user_who_can_browse_the_nodes_reads_the_items_and_the_creator_always_sees_the_job_listed()
+    {
+        (JobStore jobs, BulkJob job) = OthersJob();
+
+        var read = Assert.IsType<BulkJob>(Assert.IsType<OkObjectResult>(await AsUser(Bulk(new Authz(), jobs), "x").Get(job.Id)).Value);
+        Assert.Single(read.Items);
+
+        var listed = Assert.IsType<List<JobSummary>>(Assert.IsType<OkObjectResult>(await AsUser(Bulk(new NoNodeAccess(), jobs), "someone-else").List()).Value);
+        Assert.Single(listed);
+    }
+
+    [Fact]
+    public void Every_api_controller_carries_an_authorize_policy()
+    {
+        var controllers = typeof(BulkController).Assembly.GetTypes()
+            .Where(t => !t.IsAbstract && typeof(global::Umbraco.Cms.Api.Management.Controllers.ManagementApiControllerBase).IsAssignableFrom(t))
+            .ToList();
+
+        Assert.NotEmpty(controllers);
+        foreach (Type t in controllers)
+            Assert.True(
+                t.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false).Cast<AuthorizeAttribute>().Any(a => !string.IsNullOrWhiteSpace(a.Policy)),
+                $"{t.Name} has no [Authorize(Policy = ...)]");
     }
 
     [Fact]

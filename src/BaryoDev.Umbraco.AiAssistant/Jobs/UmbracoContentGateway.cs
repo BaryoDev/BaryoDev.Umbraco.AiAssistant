@@ -369,7 +369,7 @@ internal sealed class UmbracoContentGateway(
         {
             string path = mediaFiles.FileSystem.GetRelativePath(src);
             if (!mediaFiles.FileSystem.FileExists(path)) throw new ArgumentException("The file is missing from media storage.");
-            if (mediaFiles.FileSystem.GetSize(path) > 50_000_000) throw new ArgumentException("The file is larger than 50 MB.");
+            if (mediaFiles.FileSystem.GetSize(path) > ImagePreparer.MaxBytes) throw new ArgumentException("The image is larger than 4.5 MB. Resize it and run again.");
             using Stream stream = mediaFiles.FileSystem.OpenFile(path);
             using var buffer = new MemoryStream();
             stream.CopyTo(buffer);
