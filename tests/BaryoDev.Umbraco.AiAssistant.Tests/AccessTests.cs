@@ -37,8 +37,13 @@ public class AccessTests
         return controller;
     }
 
-    private static BulkController Bulk(IAuthorizationService authz, JobStore? jobs = null) =>
-        WithUser(new BulkController(null!, jobs ?? new JobStore(new MemoryKeyValueStore()), authz, null!, Opts.Effective(new AiAssistantOptions { Key = "test-NOT-A-REAL-KEY-000" })));
+    private static BulkController Bulk(IAuthorizationService authz, JobStore? jobs = null)
+    {
+        jobs ??= new JobStore(new MemoryKeyValueStore());
+        var settings = Opts.Effective(new AiAssistantOptions { Key = "test-NOT-A-REAL-KEY-000" });
+        var bulk = new BulkService(jobs, new FakeGateway(), [], settings, null!, TimeProvider.System);
+        return WithUser(new BulkController(bulk, jobs, authz, null!, settings));
+    }
 
     [Fact]
     public async Task A_content_only_user_cannot_run_alt_text_on_one_image()
