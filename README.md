@@ -67,7 +67,7 @@ Anything set in configuration wins over the same setting saved in the dashboard,
 - Each item has a `notes` list for advice such as a length over the limit, separate from the facts check (`missing`).
 - A run limited to one language leaves out invariant pages, unless that language is the default language.
 - Edit, reject and resume need the same permission on the node as accept. Cancel is open to the user who started the run and to Settings users.
-- Reading a job returns only the items for nodes the user can browse, and the job list shows a job only to the user who started it or to a Settings user who can browse at least one of its nodes.
+- Every job response (read, cancel, resume, edit, reject, accept, publish) returns only the items for nodes the user can browse, and the job list shows a job only to the user who started it or to a Settings user who can browse at least one of its nodes.
 - If one item fails with an unexpected error during "accept all", that item is marked failed with a plain message and the rest continue. Any unexpected error from the API gives a 500 with a plain message, and the detail goes to the server log only.
 
 ## Spend cap and usage
